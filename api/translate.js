@@ -1,17 +1,13 @@
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({
-      error: "Method not allowed",
-    });
+    return res.status(405).send("Method not allowed");
   }
 
   try {
     const { text } = req.body || {};
 
     if (!text || typeof text !== "string") {
-      return res.status(400).json({
-        error: "text is required",
-      });
+      return res.status(400).send("text is required");
     }
 
     const openaiResponse = await fetch(
@@ -54,12 +50,7 @@ export default async function handler(req, res) {
     const data = await openaiResponse.json();
 
     if (!openaiResponse.ok) {
-      console.error("OpenAI API error:", data);
-
-      return res.status(openaiResponse.status).json({
-        error: "OpenAI API request failed",
-        details: data,
-      });
+      return res.status(openaiResponse.status).send("OpenAI API request failed");
     }
 
     const translation =
@@ -71,23 +62,12 @@ export default async function handler(req, res) {
         ?.trim() || "";
 
     if (!translation) {
-      console.error("No translation returned:", data);
-
-      return res.status(500).json({
-        error: "No translation returned from OpenAI",
-      });
+      return res.status(500).send("No translation returned");
     }
 
-    return res.status(200).json({
-      original: text,
-      translation,
-    });
+    res.setHeader("Content-Type", "text/plain; charset=utf-8");
+    return res.status(200).send(translation);
   } catch (error) {
-    console.error("Server error:", error);
-
-    return res.status(500).json({
-      error: "Internal server error",
-      message: error?.message || "Unknown error",
-    });
+    return res.status(500).send(error?.message || "Internal server error");
   }
 }
