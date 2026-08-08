@@ -1,16 +1,48 @@
 export default async function handler(req, res) {
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
+    return res.status(405).json({
+      ok: false,
+      stage: "method",
+      error: "Method not allowed",
+    });
   }
 
   try {
-    const { text } = req.body || {};
+    // Tasker에서 JSON 또는 일반 문자열로 와도 둘 다 처리
+    let text = "";
 
-    if (!text || typeof text !== "string") {
-      return res.status(400).json({ error: "text is required" });
+    if (typeof req.body === "string") {
+      try {
+        const parsed = JSON.parse(req.body);
+        text = parsed?.text || "";
+      } catch {
+        text = req.body;
+      }
+    } else {
+      text = req.body?.text || "";
     }
 
-    // 1. OpenAI로 영어 번역
+    if (!text || typeof text !== "string") {
+      console.error("INPUT_ERROR", {
+        bodyType: typeof req.body,
+        body: req.body,
+      });
+
+      return res.status(400).json({
+        ok: false,
+        stage: "input",
+        error: "text is required",
+      });
+    }
+
+    console.log("REQUEST_RECEIVED", {
+      textLength: text.length,
+      hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
+      hasTelegramToken: Boolean(process.env.TELEGRAM_BOT_TOKEN),
+      hasTelegramChatId: Boolean(process.env.TELEGRAM_CHAT_ID),
+    });
+
+    // 1. OpenAI 번역
     const openaiResponse = await fetch(
       "https://api.openai.com/v1/responses",
       {
@@ -29,8 +61,8 @@ export default async function handler(req, res) {
                   type: "input_text",
                   text:
                     "Translate the following Korean SMS message into clear natural English. " +
-                    "Preserve verification codes, numbers, URLs, company names, auction names, " +
-                    "and other identifiers exactly. Output only the English translation.",
+                    "Preserve all verification codes, numbers, URLs, company names, auction names, " +
+                    "and identifiers exactly. Output only the English translation.",
                 },
               ],
             },
@@ -51,8 +83,15 @@ export default async function handler(req, res) {
     const openaiData = await openaiResponse.json();
 
     if (!openaiResponse.ok) {
-      return res.status(openaiResponse.status).json({
-        error: "OpenAI request failed",
+      console.error("OPENAI_ERROR", {
+        status: openaiResponse.status,
+        data: openaiData,
+      });
+
+      return res.status(500).json({
+        ok: false,
+        stage: "openai",
+        status: openaiResponse.status,
         details: openaiData,
       });
     }
@@ -66,12 +105,22 @@ export default async function handler(req, res) {
         ?.trim() || "";
 
     if (!translation) {
+      console.error("TRANSLATION_EMPTY", {
+        output: openaiData.output,
+      });
+
       return res.status(500).json({
+        ok: false,
+        stage: "translation",
         error: "No translation returned",
       });
     }
 
-    // 2. Telegram 채널로 번역문 전송
+    console.log("TRANSLATION_OK", {
+      translationLength: translation.length,
+    });
+
+    // 2. Telegram 채널 전송
     const telegramResponse = await fetch(
       `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
       {
@@ -89,11 +138,20 @@ export default async function handler(req, res) {
     const telegramData = await telegramResponse.json();
 
     if (!telegramResponse.ok || !telegramData.ok) {
+      console.error("TELEGRAM_ERROR", {
+        status: telegramResponse.status,
+        data: telegramData,
+      });
+
       return res.status(500).json({
-        error: "Telegram send failed",
+        ok: false,
+        stage: "telegram",
+        status: telegramResponse.status,
         details: telegramData,
       });
     }
+
+    console.log("TELEGRAM_OK");
 
     return res.status(200).json({
       ok: true,
@@ -101,7 +159,11 @@ export default async function handler(req, res) {
       translation,
     });
   } catch (error) {
+    console.error("UNEXPECTED_ERROR", error);
+
     return res.status(500).json({
+      ok: false,
+      stage: "unexpected",
       error: error?.message || "Internal server error",
     });
   }
