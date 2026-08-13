@@ -14,7 +14,7 @@ function extractOutputText(data) {
 
 async function translateToEnglish(text, extraInstruction = "") {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 60000);
+  const timeout = setTimeout(() => controller.abort(), 45000);
 
   try {
     const response = await fetch(OPENAI_URL, {
