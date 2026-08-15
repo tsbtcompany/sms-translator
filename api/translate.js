@@ -66,14 +66,14 @@ async function translateToEnglish(text, extraInstruction = "") {
   }
 }
 
-async function sendTelegram(message) {
+async function sendTelegram(message, chatId) {
   const response = await fetch(
     `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chat_id: process.env.TELEGRAM_CHAT_ID,
+        chat_id: chatId,
         text: message,
       }),
     }
@@ -94,8 +94,29 @@ export default async function handler(req, res) {
   }
 
   let originalText = "";
+  let target = "kcar";
+  let telegramChatId = process.env.TELEGRAM_CHAT_ID;
 
   try {
+    target = String(req.query?.target || "kcar").toLowerCase();
+
+    if (!['kcar', 'lotte'].includes(target)) {
+      return res.status(400).json({ ok: false, error: "Invalid target" });
+    }
+
+    telegramChatId =
+      target === "lotte"
+        ? process.env.TELEGRAM_LOTTE_CHAT_ID
+        : process.env.TELEGRAM_CHAT_ID;
+
+    if (!telegramChatId) {
+      console.error("CHAT_ID_MISSING", { target });
+      return res.status(500).json({
+        ok: false,
+        error: `Telegram chat ID is not configured for target: ${target}`,
+      });
+    }
+
     if (typeof req.body === "string") {
       try {
         const parsed = JSON.parse(req.body);
@@ -114,10 +135,12 @@ export default async function handler(req, res) {
     }
 
     console.log("REQUEST_RECEIVED", {
+      target,
       textLength: originalText.length,
       hasOpenAIKey: Boolean(process.env.OPENAI_API_KEY),
       hasTelegramToken: Boolean(process.env.TELEGRAM_BOT_TOKEN),
-      hasTelegramChatId: Boolean(process.env.TELEGRAM_CHAT_ID),
+      hasKcarChatId: Boolean(process.env.TELEGRAM_CHAT_ID),
+      hasLotteChatId: Boolean(process.env.TELEGRAM_LOTTE_CHAT_ID),
     });
 
     // First translation attempt.
@@ -140,44 +163,58 @@ export default async function handler(req, res) {
       : `[Translation unavailable — original message]\n${originalText}`;
 
     if (translationSucceeded) {
-      console.log("TRANSLATION_OK", { translationLength: translation.length });
+      console.log("TRANSLATION_OK", {
+        target,
+        translationLength: translation.length,
+      });
     } else {
       console.warn("TRANSLATION_FALLBACK", {
+        target,
         hadTranslation: Boolean(translation),
         hangulRemaining: Boolean(translation && HANGUL_REGEX.test(translation)),
       });
     }
 
-    await sendTelegram(telegramMessage);
-    console.log("TELEGRAM_OK", { fallback: !translationSucceeded });
+    await sendTelegram(telegramMessage, telegramChatId);
+    console.log("TELEGRAM_OK", { target, fallback: !translationSucceeded });
 
     return res.status(200).json({
       ok: true,
+      target,
       fallback: !translationSucceeded,
       original: originalText,
       translation: translationSucceeded ? translation : null,
     });
   } catch (error) {
-    console.error("UNEXPECTED_ERROR", error?.message || error);
+    console.error("UNEXPECTED_ERROR", { target, error: error?.message || error });
 
-    // Last-resort fallback: if anything failed after input parsing, try to send the original SMS.
-    if (originalText) {
+    // Last-resort fallback: if anything failed after input parsing, try to send the original SMS
+    // to the same target channel.
+    if (originalText && telegramChatId) {
       try {
-        await sendTelegram(`[Processing error — original message]\n${originalText}`);
-        console.log("LAST_RESORT_FALLBACK_OK");
+        await sendTelegram(
+          `[Processing error — original message]\n${originalText}`,
+          telegramChatId
+        );
+        console.log("LAST_RESORT_FALLBACK_OK", { target });
         return res.status(200).json({
           ok: true,
+          target,
           fallback: true,
           original: originalText,
           translation: null,
         });
       } catch (fallbackError) {
-        console.error("LAST_RESORT_FALLBACK_FAILED", fallbackError?.message || fallbackError);
+        console.error("LAST_RESORT_FALLBACK_FAILED", {
+          target,
+          error: fallbackError?.message || fallbackError,
+        });
       }
     }
 
     return res.status(500).json({
       ok: false,
+      target,
       error: error?.message || "Internal server error",
     });
   }
