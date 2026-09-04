@@ -190,16 +190,16 @@ export default async function handler(req, res) {
     });
 
     // First translation attempt with one automatic retry.
-    let translation = await translateToEnglish(originalText);
+    let translation = await translateWithRetry(originalText);
 
     // If any Korean remains, force one cleanup pass.
     if (translation && HANGUL_REGEX.test(translation)) {
       console.warn("HANGUL_REMAINS_AFTER_FIRST_PASS", { translation });
       translation = await translateToEnglish(
-        originalText,
-        "This is a strict cleanup pass. The final answer must contain zero Hangul characters. Translate every Korean term into English."
-        20000
-      );
+       originalText,
+       "This is a strict cleanup pass. The final answer must contain zero Hangul characters. Translate every Korean term into English.",
+      20000
+     );
     }
 
     const translationSucceeded =
