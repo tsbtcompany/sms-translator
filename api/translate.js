@@ -12,9 +12,9 @@ function extractOutputText(data) {
   );
 }
 
-async function translateToEnglish(text, extraInstruction = "") {
+async function translateToEnglish(text, extraInstruction = "", timeoutMs = 30000) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 45000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(OPENAI_URL, {
@@ -59,11 +59,57 @@ async function translateToEnglish(text, extraInstruction = "") {
 
     return extractOutputText(data);
   } catch (error) {
-    console.error("OPENAI_EXCEPTION", error?.message || error);
+    console.error("OPENAI_EXCEPTION", {
+  name: error?.name || "UnknownError",
+  message: error?.message || String(error),
+});
     return "";
   } finally {
     clearTimeout(timeout);
   }
+}
+async function translateWithRetry(text, extraInstruction = "") {
+  const attempts = [
+    { timeoutMs: 30000 },
+    { timeoutMs: 25000 },
+  ];
+
+  for (let i = 0; i < attempts.length; i++) {
+    const startedAt = Date.now();
+
+    console.log("TRANSLATION_ATTEMPT_START", {
+      attempt: i + 1,
+      timeoutMs: attempts[i].timeoutMs,
+    });
+
+    const result = await translateToEnglish(
+      text,
+      extraInstruction,
+      attempts[i].timeoutMs
+    );
+
+    const durationMs = Date.now() - startedAt;
+
+    if (result) {
+      console.log("TRANSLATION_ATTEMPT_OK", {
+        attempt: i + 1,
+        durationMs,
+      });
+
+      return result;
+    }
+
+    console.warn("TRANSLATION_ATTEMPT_FAILED", {
+      attempt: i + 1,
+      durationMs,
+    });
+
+    if (i < attempts.length - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+
+  return "";
 }
 
 async function sendTelegram(message, chatId) {
@@ -143,7 +189,7 @@ export default async function handler(req, res) {
       hasLotteChatId: Boolean(process.env.TELEGRAM_LOTTE_CHAT_ID),
     });
 
-    // First translation attempt.
+    // First translation attempt with one automatic retry.
     let translation = await translateToEnglish(originalText);
 
     // If any Korean remains, force one cleanup pass.
@@ -152,6 +198,7 @@ export default async function handler(req, res) {
       translation = await translateToEnglish(
         originalText,
         "This is a strict cleanup pass. The final answer must contain zero Hangul characters. Translate every Korean term into English."
+        20000
       );
     }
 
